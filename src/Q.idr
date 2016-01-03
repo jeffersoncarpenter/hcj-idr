@@ -1,15 +1,22 @@
 module Q
 
+import Data.HVect
+import Data.Vect
 
-data QTypeFlag = QTFNumber
+
+data QTypeFlag = QTFNull
+               | QTFNumber
                | QTFString
                | QTFBoolean
                | QTFUnion
                | QTFIntersection
                | QTFFunction
+               | QTFTypeVariable
+               | QTFTypeFunction
 
 
 data QType : QTypeFlag -> Type where
+  QTNull               : QType QTFNull
   QTNumber             : QType QTFNumber
   QTString             : QType QTFString
   QTBoolean            : QType QTFBoolean
@@ -24,9 +31,22 @@ data QType : QTypeFlag -> Type where
   QTFunction           : QType a
                       -> QType b
                       -> QType QTFFunction
-                      
+  QTTypeVariable       : Nat
+                      -> QType QTFTypeVariable
+  QTTypeFunction       : (f : QTypeFlag -> QTypeFlag)
+                      -> ({a : QTypeFlag} -> QType a -> QType (f a))
+                      -> QType QTFTypeFunction
+
+
+data QTypeVariable = TypeVariable String -- string had better be fucking unique
+
+
+-- data Unification = UnificatinoNo
+--                  | UnificationYes (List (QTypeVariable, (f :: QType f)))
+
 
 data QValue : QType flag -> Type where
+  QNull               : QValue QTNull
   QNumber             : Double
                      -> QValue QTNumber
   QString             : String
@@ -67,71 +87,16 @@ instance Show (QValue t) where
   show (QIntersectionHere v i) = "[" ++ show v ++ ", " ++ show i ++ "]"
   show (QIntersectionThere i) = "[, " ++ show i ++ "]"
   show (QFunction f) = "a function"
-  
-
--- strings
-str : QValue QTString
-str = QString "aoeu"
-
--- numbers
-num : QValue QTNumber
-num = QNumber 2
 
 
--- unions
-StringUnion : QType QTFUnion
-StringUnion = QTUnion QTString QTEmptyUnion
+qUnion : {flags : Vect n QTypeFlag} -> HVect (map QType flags) -> QType QTFUnion
+qUnion {flags=Nil} Nil = QTEmptyUnion
+qUnion {flags=t::ts} (x::xs) = QTUnion x (qUnion xs)
 
-StringNumberUnion : QType QTFUnion
-StringNumberUnion = (QTUnion QTNumber StringUnion)
-
-emptyUnion : QValue QTEmptyUnion
-emptyUnion = QEmptyUnion
-
-stringUnion : QValue StringUnion
-stringUnion = QUnion str emptyUnion
-
-stringNumberUnion : QValue StringNumberUnion
-stringNumberUnion = QUnion num (QUnion str emptyUnion)
+qIntersection : {flags : Vect n QTypeFlag} -> HVect (map QType flags) -> QType QTFIntersection
+qIntersection {flags=Nil} Nil = QTEmptyIntersection
+qIntersection {flags=t::ts} (x::xs) = QTIntersection x (qIntersection xs)
 
 
--- intersections
-StringIntersection : QType QTFIntersection
-StringIntersection = QTIntersection QTString QTEmptyIntersection
-
-StringNumberIntersection : QType QTFIntersection
-StringNumberIntersection = QTIntersection QTNumber StringIntersection
-
-emptyIntersection : QValue QTEmptyIntersection
-emptyIntersection = QEmptyIntersection
-
-stringIntersection : QValue StringIntersection
-stringIntersection = QIntersectionHere str QEmptyIntersection
-
-stringNumberIntersection : QValue StringNumberIntersection
-stringNumberIntersection = QIntersectionThere stringIntersection
-
-
--- functions
-Number2Func : QType QTFFunction
-Number2Func = QTFunction QTNumber QTNumber
-
-Number3Func : QType QTFFunction
-Number3Func = QTFunction QTNumber Number2Func
-
-addNum : QValue Number2Func
-addNum = QFunction (\ (QNumber n) => let QNumber num' = num in (QNumber (n + num')))
-
-addNums : QValue Number3Func
-addNums = QFunction (\ (QNumber m) => QFunction (\ (QNumber n) => (QNumber (m + n))))
-
-
--- expressions
-two : QExpression QTNumber
-two = QNeutral (QNumber 2)
-
-three : QExpression QTNumber
-three = QLambda (QNumber 1) (QNeutral addNum)
-
-four : QExpression QTNumber
-four = QLambda num (QLambda num (QNeutral addNums))
+Library : (a : QTypeFlag ** (t : QType a ** QValue t))
+Library = (QTFNumber ** (QTNumber ** QNumber 3))
