@@ -3,156 +3,220 @@ module Q
 import Data.HVect
 import Data.Vect
 
+unsafeIndex : Int -> List a -> a
+unsafeIndex 0 (x::xs) = x
+unsafeIndex n (x::xs) = unsafeIndex (n-1) xs
 
-data TypeFlag = TFNull
-              | TFNumber
-              | TFString
-              | TFBoolean
-              | TFTypeVariable
-              | TFQuantify
-              | TFFunction
-              | TFUnion
-              | TFIntersection
+throwError : a -> Either a b
+throwError = Left
 
-data QType : Nat -> TypeFlag -> Type where
-  QTNull               : QType 0 TFNull
-  QTNumber             : QType 0 TFNumber
-  QTString             : QType 0 TFString
-  QTBoolean            : QType 0 TFBoolean
-  QTTypeVariable       : (n : Nat)
-                      -> QType (S n) TFTypeVariable
-  QTQuantify           : QType (S n) f
-                      -> QType n TFQuantify
-  QFunction            : QType m a
-                      -> QType n b
-                      -> QType (Nat.maximum m n) TFFunction
-  QTEmptyUnion         : QType 0 TFUnion
-  QTUnion              : QType m a
-                      -> QType n TFUnion
-                      -> QType (Nat.maximum m n) TFUnion
-  QTEmptyIntersection  : QType 0 TFIntersection
-  QTIntersection       : QType m a
-                      -> QType n TFIntersection
-                      -> QType (Nat.maximum m n) TFIntersection
-
-fold : (t -> acc -> acc) -> acc -> Vect n t -> acc
-fold f e [] = e
-fold f e (x::xs) = f x (fold f e xs)
-
-unwrapFold : (a : Nat) -> (b : Nat) -> Nat.maximum a b = fold Nat.maximum 0 [a, b]
-unwrapFold Z Z = Refl
-unwrapFold Z (S k) = Refl
-unwrapFold (S k) Z = Refl
-unwrapFold (S k) (S j) = Refl
-
-maxAAA : (a : Nat) -> a = Nat.maximum a a
-maxAAA Z = Refl
-maxAAA (S k) = cong $ maxAAA k
-
-juice : (a : Nat) -> a = fold Nat.maximum 0 [a, a]
-juice x = trans (maxAAA x) (unwrapFold x x)
-
-maximumSuccessor : (a : Nat) -> (b : Nat) -> S (maximum a b) = maximum (S a) (S b)
-maximumSuccessor x y = Refl
-
-qUnion  : {freeVars : Vect n Nat}
-       -> {flags : Vect n TypeFlag}
-       -> HVect (pure QType <*> freeVars <*> flags)
-       -> QType (fold Nat.maximum 0 freeVars) TFUnion
-qUnion {freeVars=Nil} {flags=Nil} Nil = QTEmptyUnion
-qUnion {freeVars=v::vs} {flags=t::ts} (x::xs) = QTUnion x (qUnion xs)
-
-qIntersection  : {freeVars : Vect n Nat}
-              -> {flags : Vect n TypeFlag}
-              -> HVect (pure QType <*> freeVars <*> flags)
-              -> QType (fold Nat.maximum 0 freeVars) TFIntersection
-qIntersection {freeVars=Nil} {flags=Nil} Nil = QTEmptyIntersection
-qIntersection {freeVars=v::vs} {flags=t::ts} (x::xs) = QTIntersection x (qIntersection xs)
-
-qList : (n : Nat) -> QType (S n) TFIntersection
-qList n = qIntersection {freeVars=[0,S n]} {flags=[TFNull, TFUnion]} [QTNull, qListUnion]
-  where
-  qListUnion : QType (S n) TFUnion
-  qListUnion = rewrite juice (S n) in qUnion {freeVars=[S n,S n]} {flags=[TFTypeVariable, TFIntersection]} [QTTypeVariable n, qList n]
-
-qMap : (a : Nat) -> (b : Nat) -> QType (S (Nat.maximum a b)) TFFunction
-qMap v1 v2 = rewrite trans (maximumSuccessor v1 v2) (maxAAA (maximum (S v1) (S v2))) in QFunction (QFunction (QTTypeVariable v1) (QTTypeVariable v2)) (QFunction (qList v1) (qList v2))
+infixl 9 ..
+(..) : (c -> d) -> (a -> b -> c) -> a -> b -> d
+(..) f g = \a, b => f (g a b)
 
 
-
--- qListType : QType 0 QTFUnion
--- qMapType : QType 0 QTFFunction
-
-
--- data Unification : QType a f -> QType b f -> Type where
---   UnifyIdentity : Unification t t
---   UnifyXY : Unification (QTypeVariable x) (QTypeVariable y)
+data Name = Global String
+          | Local Int
+          | Quote Int
 
 
+instance Eq Name where
+  (==) (Global x) (Global y) = x == y
+  (==) (Local m) (Local n) = m == n
+  (==) (Quote m) (Quote n) = m == n
+  (==) a b = False
 
 
-  -- QTFunction           : QType a
-  --                     -> QType b
-  --                     -> QType QTFFunction
-  -- QTTypeVariable       : Nat
-  --                     -> QType QTFTypeVariable
-  -- QTTypeFunction       : (f : QTypeFlag -> QTypeFlag)
-  --                     -> ({a : QTypeFlag} -> QType a -> QType (f a))
-  --                     -> QType QTFTypeFunction
-  
+mutual
+  data Value = VLam (Value -> Value)
+             | VStar
+             | VPi Value (Value -> Value)
+             | VNeutral Neutral
+             | VNat
+             | VZero
+             | VSucc Value
+
+  data Neutral = NFree Name
+               | NApp Neutral Value
+               | NNatElim Value Value Value Neutral
+
+Ty : Type
+Ty = Value
+
+Env : Type
+Env = List Value
 
 
--- data QTypeVariable = TypeVariable String -- string had better be fucking unique
+mutual
+  -- checkable
+  data TermDown = Inf TermUp
+                | Lam TermDown
+  -- inferrable
+  data TermUp = Ann TermDown TermDown
+              | Star
+              | Pi TermDown TermDown
+              | Bound Int
+              | Free Name
+              | At TermUp TermDown
+              | TNat
+              | NatElim TermDown TermDown TermDown TermDown
+              | Zero
+              | Succ TermDown
+
+  termDownEq : TermDown -> TermDown -> Bool
+  termDownEq (Inf a) (Inf b) = termUpEq a b
+  termDownEq (Lam a) (Lam b) = termDownEq a b
+  termDownEq _ _ = False
+
+  termUpEq : TermUp -> TermUp -> Bool
+  termUpEq (Ann a b) (Ann a' b') = termDownEq a a' && termDownEq b b'
+  termUpEq Star Star = True
+  termUpEq (Pi a b) (Pi a' b') = termDownEq a a' && termDownEq b b'
+  termUpEq (Bound a) (Bound a') = a == a'
+  termUpEq (Free a) (Free a') = a == a'
+  termUpEq (At a b) (At a' b') = termUpEq a a' && termDownEq b b'
+  termUpEq _ _ = False
+
+  instance Eq TermDown where
+    (==) = assert_total termDownEq
+    (/=) = assert_total (not .. termDownEq)
+
+  instance Eq TermUp where
+    (==) = assert_total termUpEq
+    (/=) = assert_total (not .. termUpEq)
+
+Context : Type
+Context = List (Name, Ty)
+
+Result : Type -> Type
+Result a = Either String a
 
 
--- data Unification = UnificatinoNo
---                  | UnificationYes (List (QTypeVariable, (f :: QType f)))
+vfree : Name -> Value
+vfree n = VNeutral (NFree n)
+
+vapp : Value -> Value -> Value
+vapp (VLam f) v = f v
+vapp (VNeutral n) v = VNeutral (NApp n v)
 
 
--- data QValue : QType flag -> Type where
---   QNull               : QValue QTNull
---   QNumber             : Double
---                      -> QValue QTNumber
---   QString             : String
---                      -> QValue QTString
---   QBoolean            : Bool
---                      -> QValue QTBoolean
---   QEmptyUnion         : QValue QTEmptyUnion
---   QUnion              : (x : QValue a)
---                      -> QValue u
---                      -> QValue (QTUnion a u)
---   QEmptyIntersection  : QValue QTEmptyIntersection
---   QIntersectionHere   : (x : QValue a)
---                      -> QValue u
---                      -> QValue (QTIntersection a u)
---   QIntersectionThere  : QValue (QTIntersection a b)
---                      -> QValue (QTIntersection c (QTIntersection a b))
---   QFunction           : (QValue a -> QValue f)
---                      -> QValue (QTFunction a f)
+mutual
+  rec : TermDown -> Env -> Value -> Value -> Value -> Value
+  rec m d mzVal msVal kVal = case kVal of
+    VZero => mzVal
+    VSucc l => vapp (vapp msVal l) (rec m d mzVal msVal l)
+    VNeutral k => VNeutral (NNatElim (evalDown m d) mzVal msVal k)
+
+  evalUp : TermUp -> Env -> Value
+  evalUp (Ann e _) d = evalDown e d
+  evalUp Star d = VStar
+  evalUp (Pi t t') d = VPi (evalDown t d) (\x => evalDown t' (x :: d))
+  evalUp (Free x) d = vfree x
+  evalUp (Bound i) d = unsafeIndex i d
+  evalUp (At e e') d = vapp (evalUp e d) (evalDown e' d)
+  evalUp TNat d = VNat
+  evalUp Zero d = VZero
+  evalUp (Succ k) d = VSucc (evalDown k d)
+  evalUp (NatElim m mz ms k) d = let
+    mzVal = evalDown mz d
+    msVal = evalDown ms d
+    in rec m d mzVal msVal (evalDown k d)
+
+  evalDown : TermDown -> Env -> Value
+  evalDown (Inf i) d = evalUp i d
+  evalDown (Lam e) d = VLam (\x => evalDown e (x::d))
 
 
--- data QExpression : (t : QType flag) -> Type where
---   QNeutral : QValue t -> QExpression t
---   QLambda : QValue a -> QExpression (QTFunction a t) -> QExpression t
+mutual
+  substUp : Int -> TermUp -> TermUp -> TermUp
+  substUp i r (Ann e t) = Ann (substDown i r e) (substDown i r t)
+  substUp i r Star = Star
+  substUp i r (Pi t t') = Pi (substDown i r t) (substDown (i+1) r t')
+  substUp i r (Bound j) = if i == j then r else Bound j
+  substUp i r (Free y) = Free y
+  substUp i r (At e e') = At (substUp i r e) (substDown i r e')
+
+  substDown : Int -> TermUp -> TermDown -> TermDown
+  substDown i r (Inf e) = Inf (substUp i r e)
+  substDown i r (Lam e) = Lam (substDown (i+1) r e)
 
 
--- eval : QExpression t -> QValue t
--- eval (QNeutral v) = v
--- eval (QLambda a f) = let QFunction f' = eval f in f' a
+boundfree : Int -> Name -> TermUp
+boundfree i (Quote k) = Bound (i-k-1)
+boundfree i x = Free x
 
 
--- instance Show (QValue t) where
---   show (QNumber n) = show n
---   show (QString s) = show s
---   show (QBoolean b) = show b
---   show (QEmptyUnion) = "()"
---   show (QUnion v u) = "(" ++ show v ++ ", " ++ show u ++ ")"
---   show (QEmptyIntersection) = "[]"
---   show (QIntersectionHere v i) = "[" ++ show v ++ ", " ++ show i ++ "]"
---   show (QIntersectionThere i) = "[, " ++ show i ++ "]"
---   show (QFunction f) = "a function"
+mutual
+  quote : Int -> Value -> TermDown
+  quote i (VLam f) = Lam (quote (i + 1) (f (vfree (Quote i))))
+  quote i VStar = Inf Star
+  quote i (VPi v f) = Inf (Pi (quote i v) (quote (i+1) (f (vfree (Quote i)))))
+  quote i (VNeutral n) = Inf (neutralQuote i n)
+
+  neutralQuote : Int -> Neutral -> TermUp
+  neutralQuote i (NFree x) = boundfree i x
+  neutralQuote i (NApp n v) = At (neutralQuote i n) (quote i v)
 
 
+mutual
+  typeUp : Int -> Context -> TermUp -> Result Ty
+  typeUp i d (Ann e p) = do
+    typeDown i d p VStar
+    let t = evalDown p []
+    typeDown i d e t
+    return t
+  typeUp i d Star = return VStar
+  typeUp i d (Pi p p') = do
+    typeDown i d p VStar
+    let t = evalDown p []
+    typeDown (i+1) ((Local i, t) :: d)
+             (substDown 0 (Free (Local i)) p') VStar
+    return VStar
+  typeUp i d (Free x) = case lookup x d of
+    Just t => return t
+    Nothing => throwError "unknown identifier"
+  typeUp i d (At e e') = do
+    s <- typeUp i d e
+    case s of
+      VPi t t' => do
+        typeDown i d e' t
+        return (t' (evalDown e' []))
+      _ => throwError "illegal application"
+  typeUp i d TNat = return VStar
+  typeUp i d Zero = return VNat
+  typeUp i d (Succ k) = do
+    typeDown i d k VNat
+    return VNat
+  typeUp i d (NatElim m mz ms k) = do
+    typeDown i d m (VPi VNat (const VStar))
+    let mVal = evalDown m []
+    typeDown i d mz (vapp mVal VZero)
+    typeDown i d ms (VPi VNat (\l => VPi (vapp mVal l) (\_ => vapp mVal (VSucc l))))
+    typeDown i d k VNat
+    let kVal = evalDown k []
+    return (vapp mVal kVal)
 
--- Library : (a : QTypeFlag ** (t : QType a ** QValue t))
--- Library = (QTFNumber ** (QTNumber ** QNumber 3))
+  typeDown : Int -> Context -> TermDown -> Ty -> Result ()
+  typeDown i d (Inf e) t = do
+    t' <- typeUp i d e
+    (when (not ((Q.quote 0 t) == (Q.quote 0 t'))) (throwError "type mismatch"))
+  typeDown i d (Lam e) (VPi t t') =
+    typeDown (i+1)
+             ((Local i, t) :: d)
+             (substDown 0 (Free (Local i)) e) (t' (vfree (Local i)))
+  typeDown i d _ _ = throwError "type mismatch"
+
+plus : TermDown -> TermUp
+plus = NatElim
+  (Inf $ Q.Pi (Inf TNat) (Inf TNat))
+  (Lam (Inf (Bound 0)))
+  (Lam (Lam (Lam (Inf (Succ (Inf (At (Bound 1) (Inf (Bound 0)))))))))
+
+one : TermUp
+one = Succ (Inf Zero)
+
+plusOne : TermUp
+plusOne = plus (Inf one)
+
+onePlusOne : TermUp
+onePlusOne = At plusOne (Inf one)
